@@ -346,6 +346,8 @@ def main():
 	os.makedirs(args.pyworkPath, exist_ok = True) # Save the results in this process by the pckl method
 	os.makedirs(args.pycropPath, exist_ok = True) # Save the detected face clips (audio+video) in this process
 
+	download(args.videoList, args.videoFolder)
+
 	# Extract video
 	args.videoFilePath = os.path.join(args.pyaviPath, 'video.avi')
 	# If duration did not set, extract the whole video, otherwise extract the video from 'args.start' to 'args.start + args.duration'
@@ -359,11 +361,11 @@ def main():
 	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Extract the video and save in %s \r\n" %(args.videoFilePath))
 	
 	# Extract audio
-	args.audioFilePath = os.path.join(args.pyaviPath, 'audio.wav')
-	command = ("ffmpeg -y -i %s -qscale:a 0 -ac 1 -vn -threads %d -ar 16000 %s -loglevel panic" % \
-		(args.videoFilePath, args.nDataLoaderThread, args.audioFilePath))
-	subprocess.call(command, shell=True, stdout=None)
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Extract the audio and save in %s \r\n" %(args.audioFilePath))
+	# args.audioFilePath = os.path.join(args.pyaviPath, 'audio.wav')
+	# command = ("ffmpeg -y -i %s -qscale:a 0 -ac 1 -vn -threads %d -ar 16000 %s -loglevel panic" % \
+	# 	(args.videoFilePath, args.nDataLoaderThread, args.audioFilePath))
+	# subprocess.call(command, shell=True, stdout=None)
+	# sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Extract the audio and save in %s \r\n" %(args.audioFilePath))
 
 
 	# Scene detection for the video frames
