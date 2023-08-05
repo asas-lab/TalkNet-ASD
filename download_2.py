@@ -4,6 +4,7 @@ import pandas as pd
 
 from pytube import YouTube, Search, Playlist
 from pytube.exceptions import VideoUnavailable
+import time
 
 
 
@@ -40,8 +41,7 @@ def download(cvs_urls: str, out_dir: str):
         # find all YouTube videos in podcast playlist
         yt = Playlist(url)
 
-        meta_info = {}
-        id = str(uuid.uuid4())
+
 
         for video_id, video_url in enumerate(yt):
             filename = str(video_id) + '.mp4'
@@ -56,19 +56,27 @@ def download(cvs_urls: str, out_dir: str):
                     first(). \
                     download(output_path=downloaded_podcast_path, filename=filename)
 
-                meta_info[id] = {
-                    "video_title": video.title,
-                    "yt_url": video_url,
-                    "video_file_name": filename,
-                    "yt_channel_url": video.channel_url,
-                    "length": video.length
-                }
+
 
             except:
                 print("Download Error!")
 
-        #   with open("talking_head_info.json", "w") as outfile:
-        #     json.dump(meta_info, outfile)
+            meta_data = {}
+            meta_data = {
+                "video_id": filename.split('.')[0],
+                "meta_info":
+                    {
+                        "video_title": video.title,
+                        "duration": str(time.strftime("%H:%M:%S", time.gmtime(video.length))),
+                        "channel_name": yt.title,
+                        "creation_date": str(video.publish_date).split(' ')[0]
+                    }
+            }
+
+            metadate_dir = os.path.join(downloaded_podcast_path, "metadata")
+            os.makedirs(metadate_dir, exist_ok=True)
+            with open(os.path.join(metadate_dir, filename.split('.')[0] + '.json'), 'w', encoding='utf-8') as f:
+                json.dump(meta_data, f, ensure_ascii=False, indent=4)
 
 
 def main():
