@@ -63,7 +63,7 @@ def download(cvs_urls: str, out_dir: str):
 
             meta_data = {}
             meta_data = {
-                "video_id": filename.split('.')[0],
+                "video_id": video.video_id,
                 "meta_info":
                     {
                         "video_title": video.title,
