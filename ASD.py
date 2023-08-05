@@ -22,6 +22,7 @@ warnings.filterwarnings("ignore")
 parser = argparse.ArgumentParser(description = "TalkNet ASD")
 
 parser.add_argument('--videoFolder',           type=str, default="videos",  help='Path for inputs, tmps and outputs')
+parser.add_argument('--outputFolder', 	       type=str, default="output", help='Path for output of ASD')
 parser.add_argument('--pretrainModel',         type=str, default="pretrain_TalkSet.model",   help='Path for the pretrained TalkNet model')
 
 parser.add_argument('--nDataLoaderThread',     type=int,   default=10,   help='Number of workers')
@@ -51,9 +52,6 @@ if os.path.isfile(args.pretrainModel) == False: # Download the pretrained model
     cmd = "gdown --id %s -O %s"%(Link, args.pretrainModel)
     subprocess.call(cmd, shell=True, stdout=None)
 
-
-videoPath = glob.glob(os.path.join(args.videoFolder, '.*'))[0]
-args.savePath = os.path.join(args.videoFolder, args.videoName)
 
 def scene_detect(args):
 	# CPU: Scene detection, output is the list of each shot's time duration
@@ -195,9 +193,9 @@ def evaluate_network(files, args):
 	durationSet = {1,1,1,2,2,2,3,3,4,5,6} # Use this line can get more reliable result
 	for file in tqdm.tqdm(files, total = len(files)):
 		fileName = os.path.splitext(file.split('/')[-1])[0] # Load audio and video
-		_, audio = wavfile.read(os.path.join(args.pycropPath, fileName + '.wav'))
+		_, audio = wavfile.read(fileName + '.wav')
 		audioFeature = python_speech_features.mfcc(audio, 16000, numcep = 13, winlen = 0.025, winstep = 0.010)
-		video = cv2.VideoCapture(os.path.join(args.pycropPath, fileName + '.avi'))
+		video = cv2.VideoCapture(fileName + '.avi')
 		videoFeature = []
 		while video.isOpened():
 			ret, frames = video.read()
@@ -285,73 +283,120 @@ def main():
 	#     └── tracks.pckl (face tracking result)
 	# ```
 
-	# Initialization 
-	args.pyaviPath = os.path.join(args.savePath, 'pyavi')
-	args.pyworkPath = os.path.join(args.savePath, 'pywork')
-	args.pycropPath = os.path.join(args.savePath, 'pycrop')
-	if os.path.exists(args.savePath):
-		rmtree(args.savePath)
-	os.makedirs(args.pyaviPath, exist_ok = True) # The path for the input video, input audio, output video
-	os.makedirs(args.pyworkPath, exist_ok = True) # Save the results in this process by the pckl method
-	os.makedirs(args.pycropPath, exist_ok = True) # Save the detected face clips (audio+video) in this process
-
-	# Extract video
-	args.videoFilePath = os.path.join(args.pyaviPath, 'video.avi')
-	# If duration did not set, extract the whole video, otherwise extract the video from 'args.start' to 'args.start + args.duration'
-	if args.duration == 0:
-		command = ("ffmpeg -y -i %s -qscale:v 2 -threads %d -async 1 -r 25 %s -loglevel panic" % \
-			(args.videoPath, args.nDataLoaderThread, args.videoFilePath))
-	else:
-		command = ("ffmpeg -y -i %s -qscale:v 2 -threads %d -ss %.3f -to %.3f -async 1 -r 25 %s -loglevel panic" % \
-			(args.videoPath, args.nDataLoaderThread, args.start, args.start + args.duration, args.videoFilePath))
-	subprocess.call(command, shell=True, stdout=None)
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Extract the video and save in %s \r\n" %(args.videoFilePath))
-	
-	# Extract audio
-	args.audioFilePath = os.path.join(args.pyaviPath, 'audio.wav')
-	command = ("ffmpeg -y -i %s -qscale:a 0 -ac 1 -vn -threads %d -ar 16000 %s -loglevel panic" % \
-		(args.videoFilePath, args.nDataLoaderThread, args.audioFilePath))
-	subprocess.call(command, shell=True, stdout=None)
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Extract the audio and save in %s \r\n" %(args.audioFilePath))
+	videosPath = args.videoFolder
+	os.makedirs(args.outputFolder, exist_ok = True) # Save the results in in this path
 
 
-	# Scene detection for the video frames
-	scene = scene_detect(args)
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Scene detection and save in %s \r\n" %(args.pyworkPath))	
+	# loop for each podcast list
+	podcast_list = os.listdir(videosPath)
+	for podcast in podcast_list:
+		# directory output for current podcast
+		output_podcast = os.path.join(args.outputFolder, podcast)
+		if not os.path.exists(output_podcast):
+			os.makedirs(output_podcast)
 
-	# Face detection for the video frames
-	faces = inference_video(args)
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Face detection and save in %s \r\n" %(args.pyworkPath))
+		podcast_path = os.path.join(videosPath, podcast)
 
-	# Face tracking
-	allTracks, vidTracks = [], []
-	for shot in scene:
-		if shot[1].frame_num - shot[0].frame_num >= args.minTrack: # Discard the shot frames less than minTrack frames
-			allTracks.extend(track_shot(args, faces[shot[0].frame_num:shot[1].frame_num])) # 'frames' to present this tracks' timestep, 'bbox' presents the location of the faces
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Face track and detected %d tracks \r\n" %len(allTracks))
+		# loop for each video belong to current podcast
+		videos_list = os.listdir(podcast_path)
+		for video_path in videos_list:
+			# complete directory scenes
+			output_podcast_video = os.path.join(
+				output_podcast, video_path.split('.')[0])
+			if not os.path.exists(output_podcast_video):
+				os.makedirs(output_podcast_video)
 
-	# Face clips cropping
-	for ii, track in tqdm.tqdm(enumerate(allTracks), total = len(allTracks)):
-		vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d'%ii)))
-	savePath = os.path.join(args.pyworkPath, 'tracks.pckl')
-	with open(savePath, 'wb') as fil:
-		pickle.dump(vidTracks, fil)
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Face Crop and saved in %s tracks \r\n" %args.pycropPath)
-	fil = open(savePath, 'rb')
-	vidTracks = pickle.load(fil)
-
-	# Active Speaker Detection by TalkNet
-	files = glob.glob("%s/*.avi"%args.pycropPath)
-	files.sort()
-	scores = evaluate_network(files, args)
-	savePath = os.path.join(args.pyworkPath, 'scores.pckl')
-	with open(savePath, 'wb') as fil:
-		pickle.dump(scores, fil)
-	sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Scores extracted and saved in %s \r\n" %args.pyworkPath)
+			# Initialization
+			args.videoPath = os.path.join(podcast_path, video_path)
+			args.savePath = output_podcast_video
 
 
-	# Visualization, save the result as the new video	
-	visualization(vidTracks, scores, args)	
+			args.pyaviPath = os.path.join(args.savePath, 'pyavi')
+			args.pyworkPath = os.path.join(args.savePath, 'pywork')
+			args.pycropPath = os.path.join(args.savePath, 'pycrop')
+
+			args.pyframesPath = os.path.join(args.savePath, 'pyframes')
+
+			if os.path.exists(args.savePath):
+				rmtree(args.savePath)
+
+			os.makedirs(args.pyaviPath, exist_ok=True)  # The path for the input video, input audio, output video
+			os.makedirs(args.pyworkPath, exist_ok=True)  # Save the results in this process by the pckl method
+			os.makedirs(args.pycropPath, exist_ok=True)  # Save the detected face clips (audio+video) in this process
+			os.makedirs(args.pyframesPath, exist_ok=True)  # Save all the video frames
+
+			# Extract video
+			args.videoFilePath = os.path.join(args.pyaviPath, 'video.avi')
+			# If duration did not set, extract the whole video, otherwise extract the video from 'args.start' to 'args.start + args.duration'
+			if args.duration == 0:
+				command = ("ffmpeg -y -i %s -qscale:v 2 -threads %d -async 1 -r 25 %s -loglevel panic" % \
+				           (args.videoPath, args.nDataLoaderThread, args.videoFilePath))
+			else:
+				command = (
+							"ffmpeg -y -i %s -qscale:v 2 -threads %d -ss %.3f -to %.3f -async 1 -r 25 %s -loglevel panic" % \
+							(args.videoPath, args.nDataLoaderThread, args.start, args.start + args.duration,
+							 args.videoFilePath))
+			subprocess.call(command, shell=True, stdout=None)
+			sys.stderr.write(
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Extract the video and save in %s \r\n" % (args.videoFilePath))
+
+			# Extract audio
+			args.audioFilePath = os.path.join(args.pyaviPath, 'audio.wav')
+			command = ("ffmpeg -y -i %s -qscale:a 0 -ac 1 -vn -threads %d -ar 16000 %s -loglevel panic" % \
+			           (args.videoFilePath, args.nDataLoaderThread, args.audioFilePath))
+			subprocess.call(command, shell=True, stdout=None)
+			sys.stderr.write(
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Extract the audio and save in %s \r\n" % (args.audioFilePath))
+
+			# Extract the video frames
+			command = ("ffmpeg -y -i %s -qscale:v 2 -threads %d -f image2 %s -loglevel panic" %
+			           (args.videoFilePath, args.nDataLoaderThread, os.path.join(args.pyframesPath, '%06d.jpg')))
+			subprocess.call(command, shell=True, stdout=None)
+			sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") +
+			                 " Extract the frames and save in %s \r\n" % (args.pyframesPath))
+
+			# Scene detection for the video frames
+			scene = scene_detect(args)
+			sys.stderr.write(
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Scene detection and save in %s \r\n" % (args.pyworkPath))
+
+			# Face detection for the video frames
+			faces = inference_video(args)
+			sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Face detection and save in %s \r\n" % (args.pyworkPath))
+
+			# Face tracking
+			allTracks, vidTracks = [], []
+			for shot in scene:
+				if shot[1].frame_num - shot[
+					0].frame_num >= args.minTrack:  # Discard the shot frames less than minTrack frames
+					allTracks.extend(track_shot(args, faces[shot[0].frame_num:shot[
+						1].frame_num]))  # 'frames' to present this tracks' timestep, 'bbox' presents the location of the faces
+			sys.stderr.write(
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Face track and detected %d tracks \r\n" % len(allTracks))
+
+			# Face clips cropping
+			for ii, track in tqdm.tqdm(enumerate(allTracks), total=len(allTracks)):
+				vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii)))
+			savePath = os.path.join(args.pyworkPath, 'tracks.pckl')
+			with open(savePath, 'wb') as fil:
+				pickle.dump(vidTracks, fil)
+			sys.stderr.write(
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Face Crop and saved in %s tracks \r\n" % args.pycropPath)
+			fil = open(savePath, 'rb')
+			vidTracks = pickle.load(fil)
+
+			# Active Speaker Detection by TalkNet
+			files = glob.glob("%s/*.avi" % args.pycropPath)
+			files.sort()
+			scores = evaluate_network(files, args)
+			savePath = os.path.join(args.pyworkPath, 'scores.pckl')
+			with open(savePath, 'wb') as fil:
+				pickle.dump(scores, fil)
+			sys.stderr.write(
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Scores extracted and saved in %s \r\n" % args.pyworkPath)
+
+			# Visualization, save the result as the new video
+			visualization(vidTracks, scores, args)	
 
 if __name__ == '__main__':
     main()
