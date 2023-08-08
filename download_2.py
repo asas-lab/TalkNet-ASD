@@ -63,13 +63,14 @@ def download(cvs_urls: str, out_dir: str):
 
             meta_data = {}
             meta_data = {
-                "video_id": video.video_id,
+                "video_id": filename.split('.')[0],
                 "meta_info":
                     {
                         "video_title": video.title,
                         "duration": str(time.strftime("%H:%M:%S", time.gmtime(video.length))),
                         "channel_name": yt.title,
-                        "creation_date": str(video.publish_date).split(' ')[0]
+                        "creation_date": str(video.publish_date).split(' ')[0],
+                        "ytb_id": video.video_id
                     }
             }
 
