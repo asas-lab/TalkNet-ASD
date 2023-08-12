@@ -40,10 +40,17 @@ args = parser.parse_args()
 
 
 
+def write_json(new_data, filename, flag):
+	# CPU: store the metadata
+	with open(filename, "r", encoding='utf-8') as jsonFile:
+		data = json.load(jsonFile)
+	if flag == 0: # first clip
+		data["clips"] = new_data
+	else: # remaining clips
+		data["clips"].update(new_data)
 
-def load_data(file_path):
-    with open(file_path) as f:
-        return json.load(f)
+	with open(filename, "w", encoding='utf-8') as jsonFile:
+		json.dump(data, jsonFile,ensure_ascii=False, indent=4,separators=(',', ': '))
 
 
 
@@ -138,11 +145,28 @@ def track_shot(args, sceneFaces):
 				tracks.append({'frame':frameI,'bbox':bboxesI})
 	return tracks
 
-def crop_video(args, track, cropFile):
+def crop_video(args, track, cropFile, json_path, flag):
 	# CPU: crop the face clips
 	flist = glob.glob(os.path.join(args.pyframesPath, '*.jpg')) # Read the frames
 	flist.sort()
 	vOut = cv2.VideoWriter(cropFile + 't.avi', cv2.VideoWriter_fourcc(*'XVID'), 25, (224,224))# Write video
+
+	# store the metadata
+	clipStart = (track['frame'][0]) / 25
+	clipEnd = (track['frame'][-1]+1) / 25
+	bbox_list = {}
+	for idx, box in enumerate(track['bbox']):
+		bbox_list[idx] =  [round(box[0]), round(box[1]), round(box[2]), round(box[3])]
+
+	id = uuid.uuid4()
+	metadata = {
+		str(id): {
+			"duration" : {"start_sec": clipStart, "end_sec": clipEnd},
+			"bbox" : bbox_list
+		}
+	}
+	write_json(metadata, json_path, flag)
+	
 	dets = {'x':[], 'y':[], 's':[]}
 	for det in track['bbox']: # Read the tracks
 		dets['s'].append(max((det[3]-det[1]), (det[2]-det[0]))/2) 
@@ -310,6 +334,8 @@ def main():
 			args.videoPath = os.path.join(podcast_path, video_path)
 			args.savePath = output_podcast_video
 
+			video_id = video_path.split('.')[0]
+			json_path = "videos/"+ podcast +"/metadata/" + video_id + ".json"
 
 			args.pyaviPath = os.path.join(args.savePath, 'pyavi')
 			args.pyworkPath = os.path.join(args.savePath, 'pywork')
@@ -376,7 +402,10 @@ def main():
 
 			# Face clips cropping
 			for ii, track in tqdm.tqdm(enumerate(allTracks), total=len(allTracks)):
-				vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii)))
+				if ii == 0: # first clip
+					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=0))
+				else:
+					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=1))
 			savePath = os.path.join(args.pyworkPath, 'tracks.pckl')
 			with open(savePath, 'wb') as fil:
 				pickle.dump(vidTracks, fil)
