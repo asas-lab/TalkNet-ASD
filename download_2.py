@@ -5,6 +5,7 @@ import pandas as pd
 from pytube import YouTube, Search, Playlist
 from pytube.exceptions import VideoUnavailable
 import time
+import cv2
 
 
 
@@ -62,6 +63,7 @@ def download(cvs_urls: str, out_dir: str):
                 print("Download Error!")
 
             meta_data = {}
+            video_cv2 = cv2.VideoCapture(os.path.join(downloaded_podcast_path, filename))
             meta_data = {
                 "video_id": filename.split('.')[0],
                 "meta_info":
@@ -70,7 +72,9 @@ def download(cvs_urls: str, out_dir: str):
                         "duration": str(time.strftime("%H:%M:%S", time.gmtime(video.length))),
                         "channel_name": yt.title,
                         "creation_date": str(video.publish_date).split(' ')[0],
-                        "ytb_id": video.video_id
+                        "ytb_id": video.video_id,
+                        "video_size": {"height": video_cv2.get(cv2.CAP_PROP_FRAME_HEIGHT), "width": video_cv2.get(cv2.CAP_PROP_FRAME_WIDTH)},
+                        "framerate": 25
                     }
             }
 
