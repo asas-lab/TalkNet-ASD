@@ -1,4 +1,4 @@
-import sys, time, os, uuid, tqdm, torch, json, argparse, glob, subprocess, warnings, cv2, pickle, numpy, pdb, math, python_speech_features
+import sys, time, os, tqdm, torch, json, argparse, glob, subprocess, warnings, cv2, pickle, numpy, pdb, math, python_speech_features
 
 import pandas as pd
 from scipy import signal
@@ -145,7 +145,7 @@ def track_shot(args, sceneFaces):
 				tracks.append({'frame':frameI,'bbox':bboxesI})
 	return tracks
 
-def crop_video(args, track, cropFile, json_path, flag):
+def crop_video(args, track, cropFile, json_path, flag, clip_id):
 	# CPU: crop the face clips
 	flist = glob.glob(os.path.join(args.pyframesPath, '*.jpg')) # Read the frames
 	flist.sort()
@@ -158,9 +158,8 @@ def crop_video(args, track, cropFile, json_path, flag):
 	for idx, box in enumerate(track['bbox']):
 		bbox_list[idx] =  [round(box[0]), round(box[1]), round(box[2]), round(box[3])]
 
-	id = uuid.uuid4()
 	metadata = {
-		str(id): {
+		str(clip_id): {
 			"duration" : {"start_sec": clipStart, "end_sec": clipEnd},
 			"bbox" : bbox_list
 		}
@@ -403,9 +402,9 @@ def main():
 			# Face clips cropping
 			for ii, track in tqdm.tqdm(enumerate(allTracks), total=len(allTracks)):
 				if ii == 0: # first clip
-					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=0))
+					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=0, clip_id = '%05d' % ii))
 				else:
-					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=1))
+					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=1, clip_id = '%05d' % ii))
 			savePath = os.path.join(args.pyworkPath, 'tracks.pckl')
 			with open(savePath, 'wb') as fil:
 				pickle.dump(vidTracks, fil)
