@@ -31,7 +31,7 @@ def download(cvs_urls: str, out_dir: str):
 
     """
     podcasts = pd.read_csv(cvs_urls)
-    podcasts_urls = podcasts.iloc[:, 1]
+    podcasts_urls = podcasts.loc[:, "URL"]
 
     # create directory folder for each podcast
     for i, url in enumerate(podcasts_urls):
