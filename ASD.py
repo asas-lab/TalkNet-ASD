@@ -1,15 +1,13 @@
-import sys, time, os, tqdm, torch, json, argparse, glob, subprocess, warnings, cv2, pickle, numpy, pdb, math, python_speech_features
+import sys, time, os, tqdm, torch, json, argparse, glob, subprocess, warnings, cv2, numpy, math, python_speech_features
 
 import pandas as pd
 from scipy import signal
 from shutil import rmtree
 from scipy.io import wavfile
 from scipy.interpolate import interp1d
-from sklearn.metrics import accuracy_score, f1_score
 
 from scenedetect.video_manager import VideoManager
 from scenedetect.scene_manager import SceneManager
-from scenedetect.frame_timecode import FrameTimecode
 from scenedetect.stats_manager import StatsManager
 from scenedetect.detectors import ContentDetector
 
@@ -18,9 +16,7 @@ from model.faceDetector.s3fd import S3FD
 from talkNet import talkNet
 
 warnings.filterwarnings("ignore")
-
 parser = argparse.ArgumentParser(description = "TalkNet ASD")
-
 parser.add_argument('--videoFolder',           type=str, default="videos",  help='Path for inputs, tmps and outputs')
 parser.add_argument('--outputFolder', 	       type=str, default="output", help='Path for output of ASD')
 parser.add_argument('--pretrainModel',         type=str, default="pretrain_TalkSet.model",   help='Path for the pretrained TalkNet model')
@@ -37,7 +33,10 @@ parser.add_argument('--duration',              type=int, default=0,  help='The d
 
 args = parser.parse_args()
 
-
+if os.path.isfile(args.pretrainModel) == False: # Download the pretrained model
+    Link = "1AbN9fCf9IexMxEKXLQY2KYBlb-IhSEea"
+    cmd = "gdown --id %s -O %s"%(Link, args.pretrainModel)
+    subprocess.call(cmd, shell=True, stdout=None)
 
 
 def write_json(new_data, filename, flag):
@@ -53,11 +52,16 @@ def write_json(new_data, filename, flag):
 		json.dump(data, jsonFile,ensure_ascii=False, indent=4,separators=(',', ': '))
 
 
+def update_json(nonTalkingClips, filename):
+	# CPU: store the metadata
+	with open(filename, "r", encoding='utf-8') as jsonFile:
+		data = json.load(jsonFile)
 
-if os.path.isfile(args.pretrainModel) == False: # Download the pretrained model
-    Link = "1AbN9fCf9IexMxEKXLQY2KYBlb-IhSEea"
-    cmd = "gdown --id %s -O %s"%(Link, args.pretrainModel)
-    subprocess.call(cmd, shell=True, stdout=None)
+	for clipId in nonTalkingClips:
+		del data["clips"][clipId] # delete non-talking clips info
+
+	with open(filename, "w", encoding='utf-8') as jsonFile:
+		json.dump(data, jsonFile,ensure_ascii=False, indent=4,separators=(',', ': '))
 
 
 def scene_detect(args):
@@ -71,12 +75,10 @@ def scene_detect(args):
 	videoManager.start()
 	sceneManager.detect_scenes(frame_source = videoManager)
 	sceneList = sceneManager.get_scene_list(baseTimecode)
-	savePath = os.path.join(args.pyworkPath, 'scene.pckl')
 	if sceneList == []:
 		sceneList = [(videoManager.get_base_timecode(),videoManager.get_current_timecode())]
-	with open(savePath, 'wb') as fil:
-		pickle.dump(sceneList, fil)
-		sys.stderr.write('%s - scenes detected %d\n'%(args.videoFilePath, len(sceneList)))
+
+	sys.stderr.write('%s - scenes detected %d\n'%(args.videoFilePath, len(sceneList)))
 	return sceneList
 
 def inference_video(args):
@@ -93,9 +95,6 @@ def inference_video(args):
 		for bbox in bboxes:
 		  dets[-1].append({'frame':fidx, 'bbox':(bbox[:-1]).tolist(), 'conf':bbox[-1]}) # dets has the frames info, bbox info, conf info
 		sys.stderr.write('%s-%05d; %d dets\r' % (args.videoFilePath, fidx, len(dets[-1])))
-	savePath = os.path.join(args.pyworkPath,'faces.pckl')
-	with open(savePath, 'wb') as fil:
-		pickle.dump(dets, fil)
 	return dets
 
 def bb_intersection_over_union(boxA, boxB):
@@ -198,14 +197,8 @@ def crop_video(args, track, cropFile, json_path, flag, clip_id):
 	os.remove(cropFile + 't.avi')
 	return {'track':track, 'proc_track':dets}
 
-def extract_MFCC(file, outPath):
-	# CPU: extract mfcc
-	sr, audio = wavfile.read(file)
-	mfcc = python_speech_features.mfcc(audio,sr) # (N_frames, 13)   [1s = 100 frames]
-	featuresPath = os.path.join(outPath, file.split('/')[-1].replace('.wav', '.npy'))
-	numpy.save(featuresPath, mfcc)
 
-def evaluate_network(files, args):
+def evaluate_network(files, args, json_path):
 	# GPU: active speaker detection by pretrained TalkNet
 	s = talkNet()
 	s.loadParameters(args.pretrainModel)
@@ -214,6 +207,7 @@ def evaluate_network(files, args):
 	allScores = []
 	# durationSet = {1,2,4,6} # To make the result more reliable
 	durationSet = {1,1,1,2,2,2,3,3,4,5,6} # Use this line can get more reliable result
+	nonTalkingClips = [] # To store the ids for non-talking clips
 	for file in tqdm.tqdm(files, total = len(files)):
 		fileName = os.path.splitext(file.split('/')[-1])[0] # Load audio and video
 		_, audio = wavfile.read(fileName + '.wav')
@@ -250,61 +244,22 @@ def evaluate_network(files, args):
 					scores.extend(score)
 			allScore.append(scores)
 		allScore = numpy.round((numpy.mean(numpy.array(allScore), axis = 0)), 1).astype(float)
-		allScores.append(allScore)	
+		averageFramesScores = numpy.mean(allScore)
+
+		# remove non-talking clips
+		if (averageFramesScores < 0): # non-talking clip if the average frames score is less than zero
+			clipId = str(fileName.split('pycrop')[1][1:])
+			nonTalkingClips.append(clipId)
+			os.remove(fileName + '.wav')
+			os.remove(fileName + '.avi')
+
+		allScores.append(allScore)
+	update_json(nonTalkingClips, json_path) # remove non-talking clips info
 	return allScores
 
-def visualization(tracks, scores, args):
-	# CPU: visulize the result for video format
-	flist = glob.glob(os.path.join(args.pyframesPath, '*.jpg'))
-	flist.sort()
-	faces = [[] for i in range(len(flist))]
-	for tidx, track in enumerate(tracks):
-		score = scores[tidx]
-		for fidx, frame in enumerate(track['track']['frame'].tolist()):
-			s = score[max(fidx - 2, 0): min(fidx + 3, len(score) - 1)] # average smoothing
-			s = numpy.mean(s)
-			faces[frame].append({'track':tidx, 'score':float(s),'s':track['proc_track']['s'][fidx], 'x':track['proc_track']['x'][fidx], 'y':track['proc_track']['y'][fidx]})
-	firstImage = cv2.imread(flist[0])
-	fw = firstImage.shape[1]
-	fh = firstImage.shape[0]
-	vOut = cv2.VideoWriter(os.path.join(args.pyaviPath, 'video_only.avi'), cv2.VideoWriter_fourcc(*'XVID'), 25, (fw,fh))
-	colorDict = {0: 0, 1: 255}
-	for fidx, fname in tqdm.tqdm(enumerate(flist), total = len(flist)):
-		image = cv2.imread(fname)
-		for face in faces[fidx]:
-			clr = colorDict[int((face['score'] >= 0))]
-			txt = round(face['score'], 1)
-			cv2.rectangle(image, (int(face['x']-face['s']), int(face['y']-face['s'])), (int(face['x']+face['s']), int(face['y']+face['s'])),(0,clr,255-clr),10)
-			cv2.putText(image,'%s'%(txt), (int(face['x']-face['s']), int(face['y']-face['s'])), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,clr,255-clr),5)
-		vOut.write(image)
-	vOut.release()
-	command = ("ffmpeg -y -i %s -i %s -threads %d -c:v copy -c:a copy %s -loglevel panic" % \
-		(os.path.join(args.pyaviPath, 'video_only.avi'), os.path.join(args.pyaviPath, 'audio.wav'), \
-		args.nDataLoaderThread, os.path.join(args.pyaviPath,'video_out.avi'))) 
-	output = subprocess.call(command, shell=True, stdout=None)
 
 # Main function
 def main():
-	# This preprocesstion is modified based on this [repository](https://github.com/joonson/syncnet_python).
-	# ```
-	# .
-	# ├── pyavi
-	# │   ├── audio.wav (Audio from input video)
-	# │   ├── video.avi (Copy of the input video)
-	# │   ├── video_only.avi (Output video without audio)
-	# │   └── video_out.avi  (Output video with audio)
-	# ├── pycrop (The detected face videos and audios)
-	# │   ├── 000000.avi
-	# │   ├── 000000.wav
-	# │   ├── 000001.avi
-	# │   ├── 000001.wav
-	# │   └── ...
-	# └── pywork
-	#     ├── faces.pckl (face detection result)
-	#     ├── scene.pckl (scene detection result)
-	#     ├── scores.pckl (ASD result)
-	#     └── tracks.pckl (face tracking result)
-	# ```
 
 	videosPath = args.videoFolder
 	os.makedirs(args.outputFolder, exist_ok = True) # Save the results in in this path
@@ -337,16 +292,13 @@ def main():
 			json_path = "videos/"+ podcast +"/metadata/" + video_id + ".json"
 
 			args.pyaviPath = os.path.join(args.savePath, 'pyavi')
-			args.pyworkPath = os.path.join(args.savePath, 'pywork')
 			args.pycropPath = os.path.join(args.savePath, 'pycrop')
-
 			args.pyframesPath = os.path.join(args.savePath, 'pyframes')
 
 			if os.path.exists(args.savePath):
 				rmtree(args.savePath)
 
 			os.makedirs(args.pyaviPath, exist_ok=True)  # The path for the input video, input audio, output video
-			os.makedirs(args.pyworkPath, exist_ok=True)  # Save the results in this process by the pckl method
 			os.makedirs(args.pycropPath, exist_ok=True)  # Save the detected face clips (audio+video) in this process
 			os.makedirs(args.pyframesPath, exist_ok=True)  # Save all the video frames
 
@@ -383,11 +335,11 @@ def main():
 			# Scene detection for the video frames
 			scene = scene_detect(args)
 			sys.stderr.write(
-				time.strftime("%Y-%m-%d %H:%M:%S") + " Scene detection and save in %s \r\n" % (args.pyworkPath))
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Scene detection")
 
 			# Face detection for the video frames
 			faces = inference_video(args)
-			sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Face detection and save in %s \r\n" % (args.pyworkPath))
+			sys.stderr.write(time.strftime("%Y-%m-%d %H:%M:%S") + " Face detection")
 
 			# Face tracking
 			allTracks, vidTracks = [], []
@@ -405,26 +357,19 @@ def main():
 					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=0, clip_id = '%05d' % ii))
 				else:
 					vidTracks.append(crop_video(args, track, os.path.join(args.pycropPath, '%05d' % ii), json_path, flag=1, clip_id = '%05d' % ii))
-			savePath = os.path.join(args.pyworkPath, 'tracks.pckl')
-			with open(savePath, 'wb') as fil:
-				pickle.dump(vidTracks, fil)
 			sys.stderr.write(
 				time.strftime("%Y-%m-%d %H:%M:%S") + " Face Crop and saved in %s tracks \r\n" % args.pycropPath)
-			fil = open(savePath, 'rb')
-			vidTracks = pickle.load(fil)
 
 			# Active Speaker Detection by TalkNet
 			files = glob.glob("%s/*.avi" % args.pycropPath)
 			files.sort()
-			scores = evaluate_network(files, args)
-			savePath = os.path.join(args.pyworkPath, 'scores.pckl')
-			with open(savePath, 'wb') as fil:
-				pickle.dump(scores, fil)
+			scores = evaluate_network(files, args, json_path)
 			sys.stderr.write(
-				time.strftime("%Y-%m-%d %H:%M:%S") + " Scores extracted and saved in %s \r\n" % args.pyworkPath)
+				time.strftime("%Y-%m-%d %H:%M:%S") + " Scores extracted")
 
-			# Visualization, save the result as the new video
-			visualization(vidTracks, scores, args)	
+			# remove unneeded folders
+			shutil.rmtree(args.pyframesPath)
+			shutil.rmtree(args.pyaviPath)
 
 if __name__ == '__main__':
     main()
